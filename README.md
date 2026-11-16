@@ -53,6 +53,7 @@ npm run dev
 | POST | `/api/late-days/rescan` | 按贴源装载时间重新扫描迟到日 |
 | POST | `/api/jobs/late-recompute` | 定点重算；缺省重算全部待重算迟到日，也可传 `biz_days` 指定 |
 | GET | `/api/recompute-jobs` | 定点重算报告（含逐业务日前后行数与金额） |
+| GET | `/api/recompute-jobs/{id}` | 按任务编号只读查询迟到重算证明（业务日、重算前后明细行数与汇总金额） |
 
 ## 界面约定
 

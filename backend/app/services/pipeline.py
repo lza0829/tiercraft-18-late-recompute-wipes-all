@@ -320,7 +320,13 @@ def append_paste_row(domain_id: int, payload: dict) -> dict:
         paste_id = int(cur.lastrowid)
         row = conn.execute("SELECT * FROM layer_paste WHERE id=?", (paste_id,)).fetchone()
         watermark_ts, watermark_job_id = _latest_detail_watermark(conn, domain_id, biz_day)
-        is_late = False
+        # 新行装载时间晚于该业务日最近一次成功明细任务时登记迟到；从未加工过的日不算迟到
+        is_late = bool(
+            watermark_ts is not None
+            and _ts_key(row["loaded_at"]) > _ts_key(watermark_ts)
+        )
+        if is_late:
+            _mark_late(conn, domain_id, biz_day, paste_id, watermark_ts, watermark_job_id)
         conn.commit()
         out = dict(row)
         out["迟到"] = is_late
@@ -385,9 +391,10 @@ def pending_late_count_by_domain() -> dict[int, int]:
 def _rebuild_detail_for_days(conn: sqlite3.Connection, domain_id: int, days: list[str]) -> int:
     """按现行清洗规则只重跑指定业务日的明细；其它日明细行不动。返回写入行数。"""
     placeholders = ",".join("?" for _ in days)
+    # 只删除受影响业务日的明细，其它日明细行不得删除或改写
     conn.execute(
-        "DELETE FROM layer_detail WHERE domain_id=?",
-        (domain_id,),
+        f"DELETE FROM layer_detail WHERE domain_id=? AND biz_day IN ({placeholders})",
+        [domain_id, *days],
     )
     paste = conn.execute(
         f"SELECT * FROM layer_paste WHERE domain_id=? AND biz_day IN ({placeholders}) ORDER BY id",
@@ -422,9 +429,10 @@ def _rebuild_detail_for_days(conn: sqlite3.Connection, domain_id: int, days: lis
 def _rebuild_summary_for_days(conn: sqlite3.Connection, domain_id: int, days: list[str]) -> int:
     """只重算指定业务日的汇总键；其它日汇总键不动。返回汇总键数。"""
     placeholders = ",".join("?" for _ in days)
+    # 只删除受影响业务日的汇总键，其它日汇总键不得删除或改写
     conn.execute(
-        "DELETE FROM layer_summary WHERE domain_id=?",
-        (domain_id,),
+        f"DELETE FROM layer_summary WHERE domain_id=? AND biz_day IN ({placeholders})",
+        [domain_id, *days],
     )
     detail = conn.execute(
         f"SELECT * FROM layer_detail WHERE domain_id=? AND biz_day IN ({placeholders}) ORDER BY id",
@@ -601,12 +609,10 @@ def list_recompute_jobs(domain_id: int | None = None) -> list[dict]:
             args = (domain_id,)
         sql += " ORDER BY id DESC"
         jobs = rows_to_dicts(conn.execute(sql, args).fetchall())
-        lines = {
-            int(r["recompute_job_id"]): dict(r)
-            for r in conn.execute("SELECT * FROM recompute_day_lines").fetchall()
-        }
         grouped: dict[int, list[dict]] = {}
-        for line in lines.values():
+        for line in rows_to_dicts(
+            conn.execute("SELECT * FROM recompute_day_lines ORDER BY biz_day").fetchall()
+        ):
             grouped.setdefault(int(line["recompute_job_id"]), []).append(line)
         for job in jobs:
             job["step_label"] = STEP_LABEL["late_recompute"]

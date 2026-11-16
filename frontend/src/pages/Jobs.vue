@@ -7,6 +7,7 @@ const domainId = ref(1)
 const jobs = ref([])
 const lateDays = ref([])
 const recomputeJobs = ref([])
+const proofById = ref({})
 const err = ref('')
 const busy = ref(false)
 
@@ -96,6 +97,15 @@ async function appendPaste() {
 function fmtAmount(v) {
   return Number(v).toFixed(2)
 }
+
+async function openProof(jobId) {
+  err.value = ''
+  try {
+    proofById.value = { ...proofById.value, [jobId]: await getJson(`/api/recompute-jobs/${jobId}`) }
+  } catch (e) {
+    err.value = String(e.message || e)
+  }
+}
 </script>
 <template>
   <div>
@@ -166,6 +176,7 @@ function fmtAmount(v) {
             {{ job.consistent ? '与分层表一致' : '存在差异' }}
           </span>
           <span class="muted">{{ job.created_at }}</span>
+          <button class="secondary small" :disabled="busy" @click="openProof(job.id)">按编号查证明</button>
         </div>
         <table>
           <thead>
@@ -185,6 +196,23 @@ function fmtAmount(v) {
           合计：明细 {{ job.detail_before }} → {{ job.detail_after }} 行；
           汇总金额 {{ fmtAmount(job.summary_amount_before) }} → {{ fmtAmount(job.summary_amount_after) }}
         </p>
+        <div v-if="proofById[job.id]" class="proof-block">
+          <p class="muted small-note">按任务编号 {{ job.id }} 只读查询的迟到重算证明：</p>
+          <table>
+            <thead>
+              <tr>
+                <th>业务日</th><th>明细行数（重算前 → 后）</th><th>汇总金额（重算前 → 后）</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="line in proofById[job.id].days" :key="line.id">
+                <td>{{ line.biz_day }}</td>
+                <td>{{ line.detail_before }} → {{ line.detail_after }}</td>
+                <td>{{ fmtAmount(line.summary_amount_before) }} → {{ fmtAmount(line.summary_amount_after) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       <p v-if="!recomputeJobs.length" class="muted">暂无定点重算报告。</p>
     </div>

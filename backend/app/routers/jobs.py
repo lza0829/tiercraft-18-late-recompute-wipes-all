@@ -48,7 +48,7 @@ def list_late(domain_id: int | None = None, status: str | None = None):
 @router.post("/late-days/rescan")
 def rescan_late(body: JobBody):
     try:
-        return pipeline.list_late_days(body.domain_id)
+        return pipeline.rescan_late(body.domain_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -56,6 +56,15 @@ def rescan_late(body: JobBody):
 @router.get("/recompute-jobs")
 def list_recompute(domain_id: int | None = None):
     return pipeline.list_recompute_jobs(domain_id)
+
+
+@router.get("/recompute-jobs/{job_id}")
+def get_recompute(job_id: int):
+    """按定点重算任务编号只读查询迟到重算证明（逐业务日前后的明细行数与汇总金额）。"""
+    job = pipeline.get_recompute_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="定点重算报告不存在")
+    return job
 
 
 @router.post("/jobs/late-recompute")

@@ -208,3 +208,68 @@ def test_定点重算不清空全表(client, built_pipeline):
     # 明细只增加受影响日的新行（+1），汇总键总数不变（11-10 的键已存在，被就地重算）
     assert after["明细层"] == before["明细层"] + 1
     assert after["汇总层"] == before["汇总层"]
+
+
+def test_按任务编号只读查询重算证明(client, built_pipeline):
+    _append(client, {
+        "biz_day": "2026-11-10", "store_code": "S01", "store_name": "城东店",
+        "category": "饮料", "amount": 50.0, "qty": 2,
+    })
+    rep = client.post("/api/jobs/late-recompute", json={"domain_id": 1}).json()
+
+    proof = client.get(f"/api/recompute-jobs/{rep['id']}")
+    assert proof.status_code == 200
+    p = proof.json()
+    assert p["id"] == rep["id"]
+    line = p["days"][0]
+    assert line["biz_day"] == "2026-11-10"
+    assert line["detail_before"] == 3 and line["detail_after"] == 4
+    assert line["summary_amount_before"] == 261.5
+    assert line["summary_amount_after"] == 311.5
+
+    assert client.get("/api/recompute-jobs/999999").status_code == 404
+
+
+def test_多业务日定点重算证明逐日保留(client, built_pipeline):
+    # 先加入第三个业务日 11-12 并跑通主链，使其明细有真实数据
+    _append(client, {
+        "biz_day": "2026-11-12", "store_code": "S07", "store_name": "南门店",
+        "category": "饮料", "amount": 21.0, "qty": 1,
+    })
+    client.post("/api/jobs/paste-to-detail", json={"domain_id": 1})
+    client.post("/api/jobs/detail-to-summary", json={"domain_id": 1})
+    detail_1112 = [
+        r for r in client.get("/api/layers/明细", params={"domain_id": 1}).json()
+        if r["biz_day"] == "2026-11-12"
+    ]
+    summary_1112 = [
+        r for r in client.get("/api/layers/汇总", params={"domain_id": 1}).json()
+        if r["biz_day"] == "2026-11-12"
+    ]
+    assert detail_1112 and summary_1112
+    time.sleep(0.02)
+    for day, amount in (("2026-11-10", 50.0), ("2026-11-11", 18.0)):
+        _append(client, {
+            "biz_day": day, "store_code": "S01", "store_name": "城东店",
+            "category": "饮料", "amount": amount, "qty": 2,
+        })
+    rep = client.post("/api/jobs/late-recompute", json={"domain_id": 1}).json()
+    assert rep["day_count"] == 2
+    assert {d["biz_day"] for d in rep["days"]} == {"2026-11-10", "2026-11-11"}
+
+    # 报告列表同样逐日保留（不得被同一任务折叠成一条）
+    listed = client.get("/api/recompute-jobs", params={"domain_id": 1}).json()
+    fetched = [j for j in listed if j["id"] == rep["id"]][0]
+    assert {d["biz_day"] for d in fetched["days"]} == {"2026-11-10", "2026-11-11"}
+
+    # 未受影响日（11-12）明细与汇总保持原样
+    detail_1112_after = [
+        r for r in client.get("/api/layers/明细", params={"domain_id": 1}).json()
+        if r["biz_day"] == "2026-11-12"
+    ]
+    summary_1112_after = [
+        r for r in client.get("/api/layers/汇总", params={"domain_id": 1}).json()
+        if r["biz_day"] == "2026-11-12"
+    ]
+    assert detail_1112 == detail_1112_after
+    assert summary_1112 == summary_1112_after
